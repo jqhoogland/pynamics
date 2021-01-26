@@ -23,8 +23,6 @@ matplotlib.rcParams['text.usetex'] = True
 
 from ..trajectories import DeterministicTrajectory
 
-
-
 class Lorenz(DeterministicTrajectory):
     def __init__(self, sigma=10., rho=28, beta=8. / 3, **kwargs):
         super(Lorenz, self).__init__(n_dofs=3, **kwargs)

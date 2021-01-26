@@ -15,6 +15,7 @@ from nptyping import NDArray
 import numpy as np
 from tqdm import tqdm
 from scipy.integrate import RK45
+
 from .integrate import EulerMaruyama, Position
 from .utils import np_cache, qr_positive, random_orthonormal
 
