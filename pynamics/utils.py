@@ -7,23 +7,31 @@ Year: 2020
 
 """
 
-import os, hashlib, logging
+import hashlib
+import logging
+import os
 from typing import Optional, Tuple
 
 import numpy as np
 import scipy.sparse as sp
-from tqdm import tqdm
 from matplotlib import pyplot as plt
+from tqdm import tqdm
 
-def np_cache(dir_path: str = "./saves/", file_prefix: Optional[str] = None, ignore: Optional[list]=[]):
+
+def np_cache(dir_path: str = "./saves/", file_prefix: Optional[str] = None, ignore: Optional[list] = []):
     """
     A wrapper to load a previous response to a function (or to run the function and save the result otherwise).
     Assuming the function returns a np.ndarray as its response
     """
+
     def inner(func):
         def wrapper(*args, **kwargs):
-            relevant_args = [ *args ]
-            relevant_kwargs = { **kwargs}
+            relevant_args = [*args]
+            relevant_kwargs = {**kwargs}
+
+            if not kwargs.get("save", True):
+                del kwargs["save"]
+                return func(*args, **kwargs)
 
             for ignore_arg in ignore:
                 if isinstance(ignore_arg, int):
@@ -43,7 +51,6 @@ def np_cache(dir_path: str = "./saves/", file_prefix: Optional[str] = None, igno
 
             if os.path.isfile(file_path):
                 logging.info("Loading from save %s", file_path)
-
                 return np.load(file_path)
 
             response = func(*args, **kwargs)

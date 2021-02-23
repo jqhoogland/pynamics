@@ -8,16 +8,16 @@ Author: Jesse Hoogland
 Year: 2020
 
 """
-import os, hashlib, logging
-from typing import List, Optional, Tuple, Union, Any
+from typing import Optional, Any
 
-from nptyping import NDArray
 import numpy as np
-from tqdm import tqdm
+from nptyping import NDArray
 from scipy.integrate import RK45
+from tqdm import tqdm
 
-from .integrate import EulerMaruyama, Position
-from .utils import np_cache, qr_positive, random_orthonormal
+from .integrate import EulerMaruyama
+from .lyapunov import get_lyapunov_spectrum
+from .utils import np_cache
 
 # Meant to be a series of positions in some phase space.
 # The first dimension is over time; the second over phase space.
@@ -26,6 +26,7 @@ TimeSeries = NDArray[(Any, Any), float]
 # A position in phase space.
 # I should probably call this State or Configuration instead.
 Position = NDArray[(Any), float]
+
 
 class Trajectory:
     """
@@ -84,67 +85,18 @@ class Trajectory:
 
     @np_cache(dir_path="./saves/lyapunov/",
               file_prefix="spectrum-",
-              ignore=[1])
+              ignore=[0])
     def get_lyapunov_spectrum(self,
                               trajectory: np.ndarray,
                               n_burn_in: int = 0,
                               n_exponents: Optional[int] = None,
                               t_ons: int = 10) -> np.ndarray:
         """
-        :param trajectory: The discretized samples, with shape
-            (n_timesteps, n_dofs),
-        :param n_burn_in: The number of initial transients to discard
-        :param n_exponents: The number of lyapunov exponents to
-            calculate (in decreasing order).  Leave this blank to
-            compute the full spectrum.
-        :param t_ons: To lower computational burden, we do not perform
-            the full reorthonormalization step with each step in the
-            trajectory.  Instead, we reorthonormalize every `t_ons`
-            steps.
-            TODO: Iteratively compute the optimal `t_ons`
+        See `./lyapunov` > `get_lyapunov_spectrum`
         """
-
-        if n_exponents is None:
-            n_exponents = self.n_dofs
-
-        assert n_exponents <= self.n_dofs
-
-        # Decompose the growth rates using the QR decomposition
-        lyapunov_spectrum = np.zeros(n_exponents)
-
-        # We renormalize (/sample) only once every `t_ons` steps
-        n_samples = (trajectory.shape[0] - n_burn_in) // t_ons
-
-        # q will update at each timestep
-        # r will update only every `t_ons` steps
-        q = random_orthonormal([self.n_dofs, n_exponents])
-        r = np.zeros([n_exponents, n_exponents])
-
-        # Burn in so Q can relax to the Osedelets matrix
-        for t, state in tqdm(enumerate(trajectory[:n_burn_in]),
-                             desc="Burning-in Osedelets matrix"):
-            q = self.jacobian(state) @ q
-            if (t % t_ons == 0):
-                q, _ = qr_positive(q)
-
-        # Run the actual decomposition on the remaining steps
-        for t, state in tqdm(enumerate(trajectory[n_burn_in:]),
-                             desc="QR-Decomposition of trajectory"):
-            q = self.jacobian(state) @ q
-
-            if (t % t_ons == 0):
-                q, r = qr_positive(q)
-
-                r_diagonal = np.copy(np.diag(r))
-                r_diagonal[r_diagonal == 0] = 1
-
-                lyapunov_spectrum += np.log(r_diagonal)
-
-        # The Lyapunov exponents are the time-averaged logarithms of the
-        # on-diagonal (i.e scaling) elements of R
-        lyapunov_spectrum /= n_samples
-
-        return lyapunov_spectrum
+        return get_lyapunov_spectrum(
+            self.jacobian, trajectory, n_burn_in=n_burn_in, n_exponents=n_exponents, t_ons=t_ons, n_dofs=self.n_dofs
+        )
 
     @np_cache(dir_path="./saves/trajectories/", file_prefix="trajectory-")
     def run(self, n_burn_in: int = 500, n_steps: int = 10000):

@@ -9,47 +9,80 @@ See [@wolf1985]
 
 
 """
-from typing import Tuple
+from typing import Optional, Callable
 
 import numpy as np
 from tqdm import tqdm
 
-
-def random_orthonormal(shape: Tuple[int, int]):
-    # Source: https://stackoverflow.com/a/38430739/1701415
-    A = np.random.randn(*shape)
-    Q, R = np.linalg.qr(A)
-    return Q @ Q.T
+from .utils import random_orthonormal, qr_positive
 
 
-# def get_lyapunov_spectrum(jacobians: np.ndarray) -> np.ndarray:
-#     n_timesteps, n_dofs, _ = jacobians.shape
+def get_lyapunov_spectrum(
+        jacobian: Callable[[np.ndarray], np.ndarray],
+        trajectory: np.ndarray,
+        n_burn_in: int = 0,
+        n_exponents: Optional[int] = None,
+        t_ons: int = 10,
+        n_dofs: int = 100
+) -> np.ndarray:
+    """
+    :param jacobian:
+    :param trajectory: The discretized samples, with shape
+        (n_timesteps, n_dofs),
+    :param n_burn_in: The number of initial transients to discard
+    :param n_exponents: The number of lyapunov exponents to
+        calculate (in decreasing order).  Leave this blank to
+        compute the full spectrum.
+    :param t_ons: To lower computational burden, we do not perform
+        the full reorthonormalization step with each step in the
+        trajectory.  Instead, we reorthonormalize every `t_ons`
+        steps.
+        TODO: Iteratively compute the optimal `t_ons`
+    :param n_dofs:
+    """
 
-#     # Evolve an initially orthonormal system by repeated application of the Jacobian
-#     evolution = np.zeros((n_timesteps + 1, n_dofs, n_dofs))
-#     evolution[0, :, :] = random_orthonormal((n_dofs, n_dofs))
-#     for t, jacobian in tqdm(enumerate(jacobians),
-#                             desc="Computing linear evolution"):
-#         evolution[t + 1, :, :] = jacobian @ evolution[t]
+    # There are a total of `n_dofs` lyapunov exponents (1 for every degree of freedom)
+    # However, we only return the largest `n_exponents` of these
+    if n_exponents is None:
+        n_exponents = n_dofs
 
-#     # Decompose the growth rates using the QR decomposition
-#     qs = np.zeros(evolution.shape)
-#     rs = np.zeros(evolution.shape)
-#     for t, state in tqdm(enumerate(evolution), desc="Decomposing evolution"):
-#         #print(state)
-#         qs[t, :, :], rs[t, :, :] = np.linalg.qr(state)
+    assert 0 < n_exponents <= n_dofs, f"The # of exponents, {n_exponents}, must be positive & less than {n_dofs}."
+    lyapunov_spectrum = np.zeros(n_exponents)
 
-#     # The Lyapunov exponents are the time-averaged logarithms of the on-diagonal (i.e scaling)
-#     # elements of R
-#     lyapunov_exponents = np.mean(np.log(
-#         np.abs(np.diagonal(rs, axis1=1, axis2=2))),
-#                                  axis=0)
+    # We renormalize (/sample) only once every `t_ons` steps
+    n_samples = (trajectory.shape[0] - n_burn_in) // t_ons
 
-#     # We order these exponents in decreasing order
-#     lyapunov_exponents_ordered = np.sort(lyapunov_exponents)[::-1]
+    # q will update at each timestep
+    # r will update only every `t_ons` steps
+    q = random_orthonormal([n_dofs, n_exponents])
+    _ = np.zeros([n_exponents, n_exponents])
 
-#     return lyapunov_exponents_ordered
+    # Burn in so Q can relax to the Osedelets matrix
+    for t, state in enumerate(tqdm(trajectory[:n_burn_in],
+                                   desc="Burning-in Osedelets matrix")):
+        q = jacobian(state) @ q
 
+        if t % t_ons == 0:
+            q, _ = qr_positive(q)
+
+    # Run the actual decomposition on the remaining steps
+    for t, state in enumerate(tqdm(trajectory[n_burn_in:],
+                                   desc="QR-Decomposition of trajectory")):
+        q = jacobian(state) @ q
+
+        if t % t_ons == 0:
+            q, r = qr_positive(q)
+
+            r_diagonal = np.copy(np.diag(r))
+            r_diagonal[r_diagonal == 0] = 1
+
+            lyapunov_spectrum += np.log(r_diagonal)
+
+    # The Lyapunov exponents are the time-averaged logarithms of the
+    # on-diagonal (i.e scaling) elements of R
+    lyapunov_spectrum /= n_samples
+
+    return lyapunov_spectrum
 
 def get_attractor_dimension(lyapunov_spectrum: np.ndarray) -> float:
     """
