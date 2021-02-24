@@ -51,7 +51,7 @@ class Trajectory:
         :param n_dofs: The number of dofs.  if `init_state` is of type
             `int`, this must be specified, else `n_dofs` is
             overwritten by the size of `init_state`
-        :param vectorized: This is by ODESolver in some way that I
+        :param vectorized: This is required by ODESolver in some way that I
             have yet to figure out.  TODO: Is this even necessary?
         """
         self.timestep = timestep
@@ -72,7 +72,7 @@ class Trajectory:
         self.vectorized = vectorized
 
     def __str__(self):
-        return "trajectory-dof{}".format(self.n_dofs)
+        return f"<Trajectory dof={self.n_dofs}>"
 
     def get_integrator(self, init_dofs, n_steps):
         raise NotImplementedError
@@ -83,19 +83,25 @@ class Trajectory:
     def jacobian(self, state: Position) -> Position:
         raise NotImplementedError
 
-    @np_cache(dir_path="./saves/lyapunov/",
-              file_prefix="spectrum-",
-              ignore=[0])
+    @np_cache(dir_path="./saves/lyapunov/", file_prefix="spectrum-", ignore=[0])
     def get_lyapunov_spectrum(self,
                               trajectory: np.ndarray,
                               n_burn_in: int = 0,
                               n_exponents: Optional[int] = None,
-                              t_ons: int = 10) -> np.ndarray:
+                              t_ons: int = 10,
+                              **kwargs) -> np.ndarray:
         """
-        See `./lyapunov` > `get_lyapunov_spectrum`
+        See `.lyapunov`
         """
         return get_lyapunov_spectrum(
-            self.jacobian, trajectory, n_burn_in=n_burn_in, n_exponents=n_exponents, t_ons=t_ons, n_dofs=self.n_dofs
+            self.jacobian,
+            trajectory,
+            n_burn_in=n_burn_in,
+            n_exponents=n_exponents,
+            t_ons=t_ons,
+            n_dofs=self.n_dofs,
+            timestep=self.timestep,
+            **kwargs
         )
 
     @np_cache(dir_path="./saves/trajectories/", file_prefix="trajectory-")
@@ -130,7 +136,6 @@ class DeterministicTrajectory(Trajectory):
         raise NotImplementedError
 
 
-
 class StochasticTrajectory(Trajectory):
     def get_integrator(self, init_dofs, n_steps):
         return EulerMaruyama(self.take_step,
@@ -144,101 +149,5 @@ class StochasticTrajectory(Trajectory):
     def take_step(self, t: float, state: Position) -> Position:
         raise NotImplementedError
 
-    def jacobian(self, state: Position) -> Position:
-        raise NotImplementedError
-
     def jacobian(self, state: np.ndarray) -> np.ndarray:
         raise NotImplementedError
-
-
-def downsample(rate: int = 10):
-    """
-    A function decorator that downsamples the result returned by that function.
-    Assumes the function returns a np.ndarray of the shape (n_samples, n_dofs).
-
-    :returns: a function which returns a downsampled array of shape (n_samples // rate, n_dofs)
-    """
-    def inner(func):
-        def wrapper(*args, **kwargs):
-            samples = func(*args, **kwargs)
-            if rate == 0:
-                return samples
-            return samples[::rate]
-
-        return wrapper
-
-    return inner
-
-
-def downsample_split(rate: int = 10):
-    """
-    A function decorator that downsamples the result returned by that function.
-    Assumes the function returns a np.ndarray of the shape (n_samples, n_dofs).
-
-    Instead of throwing away the intermediate entries, this creates a separate
-    downsampled chain for each possible starting point.
-
-    :returns: a function which returns a downsampled array of shape (rate, n_samples // rate, n_dofs)
-    """
-    def inner(func):
-        def wrapper(*args, **kwargs):
-            samples = func(*args, **kwargs)
-
-            if rate == 0:
-                return np.array([samples])
-
-            n_downsamples = len(samples) // rate
-            downsamples = np.zeros((rate, n_downsamples, samples.shape[1]))
-
-            for i in range(rate):
-                downsamples[i, :, :] = samples[i::rate, :]
-
-            return downsamples
-
-        return wrapper
-
-    return inner
-
-
-def avg_over(key: str, axis: int = 0, include_std: bool = False):
-    """
-    A function decorator which averages a function over one of its given parameters.
-
-    To be used in conjunction with the above.
-
-    :param axis: the axis of the result to average over, defaults to 0, the first axis.
-    :param kwargs: should contain one keyword argument
-
-    e.g. A function is given an array [n_samples, n_timesteps, n_dofs].
-    This decorator performs that function n_samples times for the values [i, :, :] where i in n_samples.
-    """
-    def inner(func):
-        def wrapper(*args, **kwargs):
-            value = kwargs.pop(key)
-
-            # Make sure kwargs contains a suitable value for this key
-            if value is None:
-                raise ValueError(f"key {key} not in kwargs.")
-            elif not isinstance(value, np.ndarray):
-                raise TypeError(f"key {key} not a numpy array.")
-
-            if axis != 0:
-                np.swapaxes(value, 0, axis)
-
-            responses = []
-
-            for i in range(value.shape[0]):
-                avg_kwarg = {}
-                avg_kwarg[key] = value[i, :, :]
-                responses.append(func(*args, **avg_kwarg, **kwargs))
-
-            responses = np.array(responses)
-
-            if include_std:
-                return np.mean(responses, axis=0), np.std(responses, axis=axis)
-
-            return np.mean(responses, axis=0)
-
-        return wrapper
-
-    return inner

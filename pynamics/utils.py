@@ -14,8 +14,6 @@ from typing import Optional, Tuple
 
 import numpy as np
 import scipy.sparse as sp
-from matplotlib import pyplot as plt
-from tqdm import tqdm
 
 
 def np_cache(dir_path: str = "./saves/", file_prefix: Optional[str] = None, ignore: Optional[list] = []):
@@ -124,148 +122,104 @@ def svd_whiten(X):
     return X_white
 
 
-
-def count_trivial_fixed_pts(trajectory: np.ndarray, atol: float = 1e-3) -> int:
+def downsample(rate: int = 10):
     """
-    :param trajectory: the trajectory of shape [n_dofs, n_timesteps]
-    :param atol: This is the absolute numerical tolerance that
-        determines whether a subtrajectory has reached 0.
+    A function decorator that downsamples the result returned by that function.
+    Assumes the function returns a np.ndarray of the shape (n_samples, n_dofs).
+
+    :returns: a function which returns a downsampled array of shape (n_samples // rate, n_dofs)
     """
 
-    # 1. We transform the trajectory into a binary array according to
-    #    whether a point is within (=> 0)the given threshold of zeros or not (=> 1)
-    trajectory_bin = np.where(np.isclose(trajectory.T, 0., atol=atol), 0, 1)
+    def inner(func):
+        def wrapper(*args, **kwargs):
+            samples = func(*args, **kwargs)
+            if rate == 0:
+                return samples
+            return samples[::rate]
 
-    # 2. We count the number of columns with only zeros.
-    trajectory_collapsed = np.sum(trajectory_bin, axis=1)
-    fixed_pt_neurons = np.where(trajectory_collapsed == 0, 1, 0)
+        return wrapper
 
-    return np.sum(fixed_pt_neurons)
+    return inner
 
 
-def count_fixed_pts(trajectory: np.ndarray, atol: float = 1e-3) -> int:
+def downsample_split(rate: int = 10):
     """
-    :param trajectory: the trajectory of shape [n_dofs, n_timesteps]
-    :param atol: This is the absolute numerical tolerance that
-        determines whether a subtrajectory has reached 0.
+    A function decorator that downsamples the result returned by that function.
+    Assumes the function returns a np.ndarray of the shape (n_samples, n_dofs).
+
+    Instead of throwing away the intermediate entries, this creates a separate
+    downsampled chain for each possible starting point.
+
+    :returns: a function which returns a downsampled array of shape (rate, n_samples // rate, n_dofs)
     """
-    # 1. We transform the trajectory into a binary array according to
-    #    whether a point is within (=> 0)the given threshold of its final value or not (=> 1)
 
-    initial_state = np.array([trajectory.T[:, -1]]).T * np.ones(trajectory.T.shape)
-    trajectory_bin = np.where(np.isclose(trajectory.T, initial_state, atol=atol),
-                              0, 1)
+    def inner(func):
+        def wrapper(*args, **kwargs):
+            samples = func(*args, **kwargs)
 
-    # 2. We count the number of columns with only zeros.
-    trajectory_collapsed = np.sum(trajectory_bin, axis=1)
-    fixed_pt_neurons = np.where(trajectory_collapsed == 0, 1, 0)
+            if rate == 0:
+                return np.array([samples])
 
-    return np.sum(fixed_pt_neurons)
+            n_downsamples = len(samples) // rate
+            downsamples = np.zeros((rate, n_downsamples, samples.shape[1]))
+
+            for i in range(rate):
+                downsamples[i, :, :] = samples[i::rate, :]
+
+            return downsamples
+
+        return wrapper
+
+    return inner
 
 
-def count_cycles(trajectory: np.ndarray, atol: float = 1e-1, max_n_steps: Optional[int]=None, verbose: bool=False) -> int:
+def avg_over(key: str, axis: int = 0, include_std: bool = False):
     """
-    :param trajectory: the trajectory of shape [n_dofs, n_timesteps]
+    A function decorator which averages a function over one of its given parameters.
 
-    inspiration from https://stackoverflow.com/a/17090200/1701415
+    To be used in conjunction with the above.
+
+    :param axis: the axis of the result to average over, defaults to 0, the first axis.
+    :param kwargs: should contain one keyword argument
+
+    e.g. A function is given an array [n_samples, n_timesteps, n_dofs].
+    This decorator performs that function n_samples times for the values [i, :, :] where i in n_samples.
     """
-    n_dofs, n_timesteps = trajectory.T.shape
 
-    if max_n_steps and max_n_steps < n_timesteps:
-        trajectory = trajectory.T[:, (n_timesteps - max_n_steps):]
-    else:
-        trajectory = trajectory.T
+    def inner(func):
+        def wrapper(*args, **kwargs):
+            value = kwargs.pop(key)
 
-    cycles = np.zeros(n_dofs)
+            # Make sure kwargs contains a suitable value for this key
+            if value is None:
+                raise ValueError(f"key {key} not in kwargs.")
+            elif not isinstance(value, np.ndarray):
+                raise TypeError(f"key {key} not a numpy array.")
 
-    # TODO: See if you can do this without the explicit for loop
-    for i in tqdm(range(trajectory.shape[0]), desc="Counting cycles..."):
-        path = trajectory[i, :]
+            if axis != 0:
+                np.swapaxes(value, 0, axis)
 
-        # 1. We compute the trajectories' autocorrelations (individually per neuron)
-        path_normalized = path - np.mean(path)
-        path_norm = np.sum(path_normalized ** 2)
-        acor = np.correlate(path_normalized, path_normalized, "full") / path_norm
-        acor = acor[len(acor) // 2:] # Autocorrelation is symmetrical about the half-way point
-        # TODO: Use a more efficient way
-        # TODO: figure out the effects of the boundary
+            responses = []
 
-        # 2. Figure out where the autocorrelation peaks are
-        acor_peaks = np.where(np.logical_and(acor > np.roll(acor, 1),
-                                acor > np.roll(acor, -1)), acor, 0)
+            for i in range(value.shape[0]):
+                avg_kwarg = {}
+                avg_kwarg[key] = value[i, :, :]
+                responses.append(func(*args, **avg_kwarg, **kwargs))
 
-        # 3. Figure out whether these peaks are within our tolerance of 1.
-        #    We subtract one because the first entry will always have perfect autocorrelation.
-        close_peaks = np.where(acor_peaks > 1. -atol, 1., 0.)
-        is_cycle = np.sum(close_peaks) - 1. > 0
+            responses = np.array(responses)
 
-        cycles[i] = is_cycle
+            if include_std:
+                return np.mean(responses, axis=0), np.std(responses, axis=axis)
 
-        if verbose:
-            # While debugging
-            plt.plot(path[:10000])
-            plt.show()
+            return np.mean(responses, axis=0)
 
-            plt.plot(acor)
-            plt.plot(close_peaks)
-            plt.show()
+        return wrapper
 
-    print(np.sum(cycles))
-
-    return np.sum(cycles)
-
-def participation_ratio(trajectory, max_n_steps: Optional[int]=None ):
-    """
-    TODO: consistency in shape of trajectory
-    :param trajectory: the trajectory of shape [n_timesteps, n_dofs]
-    """
-    n_timesteps = trajectory.shape[1]
-
-    if max_n_steps and max_n_steps < n_timesteps:
-        trajectory = trajectory[:, (n_timesteps - max_n_steps):]
+    return inner
 
 
-    covariance = np.cov(trajectory)
-    eigvals, _ = np.linalg.eig(covariance)
-
-    return np.power(np.sum(eigvals), 2) / np.sum(np.power(eigvals, 2))
-
-
-def test_count_trivial_fixed_pts():
-    trajectory = np.array([[0., 1., 2.], [0., 0., 0.], [0., 0., 0.],
-                           [1., 0., 0.]])
-    assert count_trivial_fixed_pts(trajectory.T) == 2
-    assert count_fixed_pts(trajectory.T) == count_trivial_fixed_pts(trajectory.T)
-
-def test_count_fixed_pts():
-    trajectory = np.array([[0., 1., 2.], [0., 0., 0.], [2., 2., 2.],
-                           [1., 1., 1.]])
-    assert count_fixed_pts(trajectory.T) == 3
-    assert count_fixed_pts(trajectory.T) >= count_trivial_fixed_pts(trajectory.T)
-
-def test_count_cycles():
-    x = np.arange(0, 100 * np.pi, 0.01)
-    signal_1 = np.sin(x)
-    signal_2 = np.random.uniform(size=len(x))
-    signal_3 = np.sin(2 * x) + np.cos(3 * x)
-    signal_4 = np.ones(len(x))
-    signal_5 = np.random.uniform(size=len(x))
-
-    trajectory = np.array([signal_1, signal_2, signal_3, signal_4, signal_5])
-
-    assert count_cycles(trajectory.T, 0.1, verbose=False)  == 2
-
-def test_participation_ratio():
-    # Fully dependent components -> D = 1
-    signal_1 = np.arange(5)
-    trajectory_1 = np.array([signal_1, 2 * signal_1, 3 * signal_1]).T
-    assert np.isclose(participation_ratio(trajectory_1), 1.)
-
-    # Fully independent components -> D = N (number of components)
-    trajectory_2 = np.eye(100, 5).T
-
-    assert np.isclose(participation_ratio(trajectory_2), 5., atol=0.1)
-
+# ------------------------------------------------------------
+# TESTING
 
 def test_qr_positive():
     a = np.random.uniform(size=(100, 50))

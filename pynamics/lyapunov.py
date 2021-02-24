@@ -22,8 +22,10 @@ def get_lyapunov_spectrum(
         trajectory: np.ndarray,
         n_burn_in: int = 0,
         n_exponents: Optional[int] = None,
-        t_ons: int = 10,
-        n_dofs: int = 100
+        t_ons: int = 1,
+        timestep: int = 1,
+        n_dofs: int = 100,
+        **kwargs
 ) -> np.ndarray:
     """
     :param jacobian:
@@ -41,6 +43,9 @@ def get_lyapunov_spectrum(
     :param n_dofs:
     """
 
+    # The reorthonormalization interval
+    w_ons = kwargs.get("w_ons", round(t_ons / timestep))
+
     # There are a total of `n_dofs` lyapunov exponents (1 for every degree of freedom)
     # However, we only return the largest `n_exponents` of these
     if n_exponents is None:
@@ -50,7 +55,7 @@ def get_lyapunov_spectrum(
     lyapunov_spectrum = np.zeros(n_exponents)
 
     # We renormalize (/sample) only once every `t_ons` steps
-    n_samples = (trajectory.shape[0] - n_burn_in) // t_ons
+    n_samples = (trajectory.shape[0] - n_burn_in) // w_ons
 
     # q will update at each timestep
     # r will update only every `t_ons` steps
@@ -62,7 +67,7 @@ def get_lyapunov_spectrum(
                                    desc="Burning-in Osedelets matrix")):
         q = jacobian(state) @ q
 
-        if t % t_ons == 0:
+        if t % w_ons == 0:
             q, _ = qr_positive(q)
 
     # Run the actual decomposition on the remaining steps
@@ -70,7 +75,7 @@ def get_lyapunov_spectrum(
                                    desc="QR-Decomposition of trajectory")):
         q = jacobian(state) @ q
 
-        if t % t_ons == 0:
+        if t % w_ons == 0:
             q, r = qr_positive(q)
 
             r_diagonal = np.copy(np.diag(r))
@@ -80,7 +85,7 @@ def get_lyapunov_spectrum(
 
     # The Lyapunov exponents are the time-averaged logarithms of the
     # on-diagonal (i.e scaling) elements of R
-    lyapunov_spectrum /= n_samples
+    lyapunov_spectrum /= n_samples * t_ons
 
     return lyapunov_spectrum
 
