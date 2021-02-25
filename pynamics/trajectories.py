@@ -83,7 +83,7 @@ class Trajectory:
     def jacobian(self, state: Position) -> Position:
         raise NotImplementedError
 
-    @np_cache(dir_path="./saves/lyapunov/", file_prefix="spectrum-", ignore=[0])
+    @np_cache(dir_path="./saves/lyapunov/", file_prefix="spectrum-", ignore=[1])
     def get_lyapunov_spectrum(self,
                               trajectory: np.ndarray,
                               n_burn_in: int = 0,
