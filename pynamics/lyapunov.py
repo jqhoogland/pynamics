@@ -17,6 +17,27 @@ from tqdm import tqdm
 from .utils import random_orthonormal, qr_positive
 
 
+def qr_evolve(trajectory, jacobian, q, desc, w_ons, return_spectrum: bool = False):
+    lyapunov_spectrum = np.zeros(q.shape[1])
+
+    for t, state in enumerate(tqdm(trajectory,
+                                   desc=desc)):
+        q = jacobian(state) @ q
+
+        if t % w_ons == 0:
+            q, r = qr_positive(q)
+
+            r_diagonal = np.copy(np.diag(r))
+            r_diagonal[r_diagonal == 0] = 1
+
+            lyapunov_spectrum += np.log(r_diagonal)
+
+    if return_spectrum:
+        return q, lyapunov_spectrum
+
+    return q
+
+
 def get_lyapunov_spectrum(
         jacobian: Callable[[np.ndarray], np.ndarray],
         trajectory: np.ndarray,
@@ -52,7 +73,6 @@ def get_lyapunov_spectrum(
         n_exponents = n_dofs
 
     assert 0 < n_exponents <= n_dofs, f"The # of exponents, {n_exponents}, must be positive & less than {n_dofs}."
-    lyapunov_spectrum = np.zeros(n_exponents)
 
     # We renormalize (/sample) only once every `t_ons` steps
     n_samples = (trajectory.shape[0] - n_burn_in) // w_ons
@@ -63,25 +83,17 @@ def get_lyapunov_spectrum(
     _ = np.zeros([n_exponents, n_exponents])
 
     # Burn in so Q can relax to the Osedelets matrix
-    for t, state in enumerate(tqdm(trajectory[:n_burn_in],
-                                   desc="Burning-in Osedelets matrix")):
-        q = jacobian(state) @ q
+    # for t, state in enumerate(tqdm(trajectory[:n_burn_in],
+    #                                desc="Burning-in Osedelets matrix")):
+    #     q = jacobian(state) @ q
+    #
+    #     if t % w_ons == 0:
+    #         q, _ = qr_positive(q)
 
-        if t % w_ons == 0:
-            q, _ = qr_positive(q)
+    q = qr_evolve(trajectory, jacobian, q, "Burning-in Osedelets matrix", w_ons, False)
 
     # Run the actual decomposition on the remaining steps
-    for t, state in enumerate(tqdm(trajectory[n_burn_in:],
-                                   desc="QR-Decomposition of trajectory")):
-        q = jacobian(state) @ q
-
-        if t % w_ons == 0:
-            q, r = qr_positive(q)
-
-            r_diagonal = np.copy(np.diag(r))
-            r_diagonal[r_diagonal == 0] = 1
-
-            lyapunov_spectrum += np.log(r_diagonal)
+    q, lyapunov_spectrum = qr_evolve(trajectory, jacobian, q, "Reorthnormalizing", w_ons, True)
 
     # The Lyapunov exponents are the time-averaged logarithms of the
     # on-diagonal (i.e scaling) elements of R

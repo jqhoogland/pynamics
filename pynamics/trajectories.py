@@ -35,10 +35,11 @@ class Trajectory:
 
     """
     def __init__(self,
-                 timestep: float =1e-3,
+                 timestep: float = 1e-3,
                  init_state: Optional[Position] = None,
                  n_dofs: Optional[int] = 100,
-                 vectorized: bool=True):
+                 vectorized: bool = True,
+                 **kwargs):
         """
         :param timestep: The timestep to take curing an evolution.
             This is 1 for discrete trajectories, otherwise a value
@@ -70,6 +71,8 @@ class Trajectory:
         self.init_state = init_state
         self.n_dofs = n_dofs
         self.vectorized = vectorized
+
+        super().__init__(**kwargs)
 
     def __str__(self):
         return f"<Trajectory dof={self.n_dofs}>"

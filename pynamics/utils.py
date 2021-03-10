@@ -14,6 +14,7 @@ from typing import Optional, Tuple
 
 import numpy as np
 import scipy.sparse as sp
+from numba import jit
 
 
 def np_cache(dir_path: str = "./saves/", file_prefix: Optional[str] = None, ignore: Optional[list] = []):
@@ -61,13 +62,12 @@ def np_cache(dir_path: str = "./saves/", file_prefix: Optional[str] = None, igno
     return inner
 
 
-def qr_positive(a: np.ndarray, *args,
-                **kwargs) -> Tuple[np.ndarray, np.ndarray]:
-    q, r = np.linalg.qr(a, *args, **kwargs)
-    diagonal_signs = np.sign(np.diagonal(r))
+@jit(nopython=True)
+def qr_positive(a: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    q, r = np.linalg.qr(a)
+    diagonal_signs = np.sign(np.diag(r))
     return q @ np.diag(diagonal_signs), np.diag(
         diagonal_signs) @ r  # TODO: make sure these are aligned correctly
-
 
 def random_orthonormal(shape: Tuple[int, int]):
     # Source: https://stackoverflow.com/a/38430739/1701415
